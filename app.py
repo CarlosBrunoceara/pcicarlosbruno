@@ -58,24 +58,95 @@ def classify_pci_and_get_color(pci_value):
     if 0 <= pci_value < 10: return "Perda funcional", "dimgray"
     return "Fora do Intervalo", "black"
 
+# -------------------------------------------------------------------
+# FUNÇÃO DE CÁLCULO DO PCI CORRIGIDA
+# -------------------------------------------------------------------
 def calcular_pci_para_amostra(df_amostra):
+    """
+    Calcula o PCI para uma amostra, aplicando o método de correção iterativo
+    baseado nas curvas de VDC (Valor Deduzido Corrigido) para diferentes
+    quantidades de defeitos significativos (q).
+    """
     dv_col_name = 'VALOR DEDUZIDO'
-    if df_amostra.empty or dv_col_name not in df_amostra.columns: return np.nan
+    
+    # 1. VALIDAÇÃO E PREPARAÇÃO INICIAL
+    if df_amostra.empty or dv_col_name not in df_amostra.columns:
+        return np.nan
+    
     df_amostra[dv_col_name] = pd.to_numeric(df_amostra[dv_col_name], errors='coerce')
     dv_validos = df_amostra[dv_col_name].dropna()
-    if dv_validos.empty: return 100
+    
+    if dv_validos.empty:
+        return 100.0 # PCI máximo se não há defeitos
+
+    # 2. CÁLCULO DE 'm' E FILTRAGEM DOS MAIORES VALORES DEDUZIDOS
     hdv = dv_validos.max()
-    m_calc = 1 + (9/98) * (100 - hdv)
+    m_calc = 1 + (9 / 98) * (100 - hdv)
     m = round(min(10, m_calc))
+    
     df_filtrada = df_amostra.nlargest(m, dv_col_name)
-    q = sum(1 for v in df_filtrada[dv_col_name] if v > 2)
-    if q <= 1:
-        cdv = df_filtrada[dv_col_name].sum()
+    dv_atuais = df_filtrada[dv_col_name].tolist()
+    
+    # 3. PROCESSO DE CÁLCULO DO CDV (VALOR DEDUZIDO CORRIGIDO)
+    lista_cdv_calculados = []
+    
+    while True:
+        q = sum(1 for v in dv_atuais if v > 2)
+        vdt = sum(dv_atuais)
+
+        # Se q <= 1, o VDT é o CDV final desta iteração. O processo para.
+        if q <= 1:
+            lista_cdv_calculados.append(vdt)
+            break
+            
+        # Se q > 1, usa-se a fórmula de correção correspondente
+        vdc_calculado = np.nan
+        
+        # Fórmulas baseadas nas curvas de correção padrão do PCI
+        if q == 2:
+            vdc_calculado = -0.0016 * (vdt**2) + 0.915 * vdt - 8.1816
+        elif q == 3:
+            vdc_calculado = -0.0016 * (vdt**2) + 0.9195 * vdt - 11.617
+        elif q == 4:
+            vdc_calculado = -0.0017 * (vdt**2) + 0.9014 * vdt - 13.997
+        elif q == 5:
+            vdc_calculado = -0.0018 * (vdt**2) + 0.9187 * vdt - 18.047
+        elif q == 6:
+            vdc_calculado = -0.002 * (vdt**2) + 0.9544 * vdt - 22.955
+        elif q == 7:
+            vdc_calculado = -0.002 * (vdt**2) + 0.9212 * vdt - 20.683
+        
+        if pd.isna(vdc_calculado):
+            # Se não há fórmula para o 'q' atual (ex: q > 7), para o processo iterativo
+            lista_cdv_calculados.append(vdt) # Adiciona a soma atual como um candidato
+            break
+
+        lista_cdv_calculados.append(vdc_calculado)
+        
+        # PREPARAÇÃO PARA A PRÓXIMA ITERAÇÃO
+        # Reduz o menor valor deduzido > 2 para exatamente 2.0
+        valores_superiores_a_dois = [v for v in dv_atuais if v > 2]
+        
+        if not valores_superiores_a_dois:
+            break
+            
+        menor_a_ajustar = min(valores_superiores_a_dois)
+        
+        try:
+            idx_to_change = dv_atuais.index(menor_a_ajustar)
+            dv_atuais[idx_to_change] = 2.0
+        except ValueError:
+            break
+
+    # 4. DETERMINAÇÃO DO CDV FINAL E CÁLCULO DO PCI
+    # O CDV final é o maior valor encontrado em todas as iterações de correção
+    if not lista_cdv_calculados:
+        cdv_final = sum(df_filtrada[dv_col_name].tolist()) # Fallback
     else:
-        vdt_total = df_filtrada[dv_col_name].sum()
-        cdv_calc = -0.0018 * (vdt_total**2) + 0.9187 * vdt_total - 18.047
-        cdv = max(cdv_calc, hdv)
-    return max(0, 100 - cdv)
+        cdv_final = max(lista_cdv_calculados)
+        
+    pci = max(0, 100 - cdv_final)
+    return pci
 
 def prever_valor_deduzido(defeito_fmt, severidade_code, densidade):
     try:
@@ -153,7 +224,6 @@ else:
     itens_defeitos_ordenados = sorted(mapa_defeitos.items(), key=lambda item: item[1])
     opcoes_defeito = [''] + [f"{num} - {defeito}" for defeito, num in itens_defeitos_ordenados]
     
-    # --- CORREÇÃO: O valor interno para 'Alto (H)' agora é 'H' ---
     opcoes_severidade = [('', ''), ('Alto (H)', 'H'), ('Médio (M)', 'M'), ('Baixo (L)', 'L')]
 
     for amostra_id, amostra_data in st.session_state.amostras.items():
