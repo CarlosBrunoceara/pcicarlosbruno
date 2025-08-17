@@ -58,9 +58,6 @@ def classify_pci_and_get_color(pci_value):
     if 0 <= pci_value < 10: return "Perda funcional", "dimgray"
     return "Fora do Intervalo", "black"
 
-# -------------------------------------------------------------------
-# FUNÇÃO DE CÁLCULO DO PCI CORRIGIDA
-# -------------------------------------------------------------------
 def calcular_pci_para_amostra(df_amostra):
     """
     Calcula o PCI para uma amostra, aplicando o método de correção iterativo
@@ -237,7 +234,7 @@ else:
                 if not df.empty:
                     df['DENSIDADE'] = (df['TOTAL'] / area_atual) * 100
                     for i, row in df.iterrows():
-                        df.loc[i, 'VALOR DEDUZIDO'] = prever_valor_deduzido(row['DEFEITO'], row['SEVERIDADE_CODE'], df.loc[i, 'DENSIDADE'])
+                        df.loc[i, 'VALOR DEDUZIDO'] = prever_valor_deduzido(row['DEFEITO'], row['SEVERIDADE_CODE'], df.loc[i, 'DENSidade'])
                     st.session_state.amostras[amostra_id]['df'] = df
                 st.rerun()
 
@@ -283,4 +280,21 @@ else:
             pci_individual = amostra_data['pci']
             if pd.notna(pci_individual):
                 classificacao_ind, cor_ind = classify_pci_and_get_color(pci_individual)
-                col_b2.metric(label=f"PCI da Amostra", value=f"{pci_individual:.2f}", help=f"Classificação: {classificacao_ind}")
+                
+                # A coluna col_b2 agora conterá tanto o valor quanto a classificação
+                with col_b2:
+                    # Dividimos o espaço para colocar o valor à esquerda e a classificação à direita
+                    sub_col_valor, sub_col_class = st.columns([1, 2])
+                    
+                    sub_col_valor.metric(
+                        label="PCI da Amostra", 
+                        value=f"{pci_individual:.2f}"
+                    )
+                    
+                    # Usamos markdown para exibir a classificação com cor
+                    # Adicionamos uma quebra de linha para um melhor alinhamento vertical
+                    sub_col_class.markdown("<br>", unsafe_allow_html=True)
+                    sub_col_class.markdown(
+                        f"**Classificação:** <span style='color:{cor_ind};'>{classificacao_ind}</span>",
+                        unsafe_allow_html=True
+                    )
