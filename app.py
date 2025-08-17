@@ -25,37 +25,15 @@ def carregar_modelos():
         return model, preprocessor, scaler_y
     except Exception as e:
         st.error(f"Erro CRÍTICO ao carregar arquivos do modelo: {e}")
-        st.error("Verifique se os arquivos 'modelo_pci.keras', 'preprocessor_pci.joblib' e 'scaler_y_pci.joblib' estão na mesma pasta que o app.py.")
         st.stop()
 
 loaded_model, loaded_preprocessor, loaded_scaler_y = carregar_modelos()
-
-# --- Carregamento dinâmico dos DEFEITOS (Está CORRETO e deve ser mantido) ---
-try:
-    CATEGORIAS_DEFEITO = loaded_preprocessor.named_transformers_['cat'].categories_[0]
-except Exception as e:
-    st.error(f"Erro ao extrair categorias de defeitos do pré-processador: {e}")
-    st.stop()
-
-MAPA_DEFEITOS_UI = {f"{i+1} - {defeito}": defeito for i, defeito in enumerate(CATEGORIAS_DEFEITO)}
-OPCOES_DEFEITO_UI = [''] + list(MAPA_DEFEITOS_UI.keys())
-
-
-# --- MUDANÇA CRÍTICA / CORREÇÃO: Definir as opções de SEVERIDADE explicitamente ---
-# Isso garante que 'Alto (H)' e as outras opções sempre apareçam na interface.
-OPCOES_SEVERIDADE_UI = [
-    ('', ''),           # Opção em branco
-    ('Alto (H)', 'A'),
-    ('Médio (M)', 'M'),
-    ('Baixo (L)', 'L')
-]
-
 
 if 'amostras' not in st.session_state:
     st.session_state.amostras = {}
 
 # ===================================================================
-# 2. FUNÇÕES DE CÁLCULO (O restante do código permanece o mesmo)
+# 2. FUNÇÕES DE CÁLCULO (AMOSTRAGEM E PCI)
 # ===================================================================
 def calcular_amostras_params(CV, W, e, s):
     AREA_PADRAO = 225.0
@@ -82,12 +60,11 @@ def classify_pci_and_get_color(pci_value):
 
 def calcular_pci_para_amostra(df_amostra):
     dv_col_name = 'VALOR DEDUZIDO'
-    if df_amostra.empty or dv_col_name not in df_amostra.columns: return 100.0
+    if df_amostra.empty or dv_col_name not in df_amostra.columns: return np.nan
     df_amostra[dv_col_name] = pd.to_numeric(df_amostra[dv_col_name], errors='coerce')
     dv_validos = df_amostra[dv_col_name].dropna()
-    if dv_validos.empty: return 100.0
+    if dv_validos.empty: return 100
     hdv = dv_validos.max()
-    if hdv >= 100: return 0.0
     m_calc = 1 + (9/98) * (100 - hdv)
     m = round(min(10, m_calc))
     df_filtrada = df_amostra.nlargest(m, dv_col_name)
@@ -96,24 +73,21 @@ def calcular_pci_para_amostra(df_amostra):
         cdv = df_filtrada[dv_col_name].sum()
     else:
         vdt_total = df_filtrada[dv_col_name].sum()
-        # Usando a fórmula que estava no seu código original
         cdv_calc = -0.0018 * (vdt_total**2) + 0.9187 * vdt_total - 18.047
         cdv = max(cdv_calc, hdv)
     return max(0, 100 - cdv)
 
-def prever_valor_deduzido(defeito, severidade_code, densidade):
+def prever_valor_deduzido(defeito_fmt, severidade_code, densidade):
     try:
+        defeito = defeito_fmt.split(' - ', 1)[1]
         dados = pd.DataFrame([[defeito, severidade_code, densidade]], columns=['DEFEITO', 'SEVERIDADE', 'DENSIDADE (%)'])
-        dados_proc = loaded_preprocessor.transform(dados)
-        pred_scaled = loaded_model.predict(dados_proc, verbose=0)
+        pred_scaled = loaded_model.predict(loaded_preprocessor.transform(dados), verbose=0)
         valor_final = loaded_scaler_y.inverse_transform(pred_scaled)
         return round(float(valor_final[0][0]), 2)
-    except Exception as e:
-        st.warning(f"Não foi possível prever o valor para o defeito '{defeito}'. Erro: {e}")
-        return np.nan
+    except Exception: return np.nan
 
 # ===================================================================
-# 3. INTERFACE GRÁFICA (SIDEBAR) - Sem alterações
+# 3. INTERFACE GRÁFICA (SIDEBAR)
 # ===================================================================
 with st.sidebar:
     st.header("1. Parâmetros da Via")
@@ -132,10 +106,8 @@ with st.sidebar:
             for i in range(n_amostras):
                 amostra_id = f"Amostra_{i+1}"
                 st.session_state.amostras[amostra_id] = {
-                    "df": pd.DataFrame(columns=['DEFEITO', 'DEFEITO_UI', 'SEVERIDADE', 'SEVERIDADE_CODE', 'Q1', 'Q2', 'Q3', 'Q4', 'TOTAL', 'DENSIDADE', 'VALOR DEDUZIDO']),
-                    "posicao": posicoes[i],
-                    "area": area,
-                    "pci": np.nan
+                    "df": pd.DataFrame(columns=['DEFEITO', 'SEVERIDADE', 'SEVERIDADE_CODE', 'Q1', 'Q2', 'Q3', 'Q4', 'TOTAL', 'DENSIDADE', 'VALOR DEDUZIDO']),
+                    "posicao": posicoes[i], "area": area, "pci": np.nan
                 }
             st.success(f"{n_amostras} amostras geradas com área padrão de {area:.2f} m².")
             st.rerun()
@@ -145,7 +117,7 @@ with st.sidebar:
         idx = len(st.session_state.amostras) + 1
         amostra_id = f"Amostra_Extra_{idx}"
         st.session_state.amostras[amostra_id] = {
-            "df": pd.DataFrame(columns=['DEFEITO', 'DEFEITO_UI', 'SEVERIDADE', 'SEVERIDADE_CODE', 'Q1', 'Q2', 'Q3', 'Q4', 'TOTAL', 'DENSIDADE', 'VALOR DEDUZIDO']),
+            "df": pd.DataFrame(columns=['DEFEITO', 'SEVERIDADE', 'SEVERIDADE_CODE', 'Q1', 'Q2', 'Q3', 'Q4', 'TOTAL', 'DENSIDADE', 'VALOR DEDUZIDO']),
             "posicao": 0.0, "area": 225.0, "pci": np.nan
         }
         st.rerun()
@@ -158,7 +130,7 @@ with st.sidebar:
                 st.rerun()
 
 # ===================================================================
-# 4. ÁREA PRINCIPAL (EXIBIÇÃO DAS TABELAS E RESULTADOS) - Pequenos ajustes
+# 4. ÁREA PRINCIPAL (EXIBIÇÃO DAS TABELAS E RESULTADOS)
 # ===================================================================
 st.title("Ferramenta Integrada de Análise de Pavimentos")
 
@@ -176,6 +148,13 @@ else:
     st.markdown("---")
     
     st.header("3. Coleta de Dados e Análise por Amostra")
+    
+    mapa_defeitos = {'BLOCOS DANIFICADOS': 1, 'DEPRESSÕES': 2, 'DANO DE CONTENÇÃO': 3, 'ESPAÇAMENTO EXCESSIVO DAS JUNTAS': 4, 'DIFERENÇA DE ALTURA DO BLOCO': 5, 'ONDULAÇÃO': 6, 'DESLOCAMENTO HORIZONTAL': 7, 'PERDA DE MATERIAL DE REJUNTAMENTO': 8, 'PERDA DE BLOCOS': 9, 'REMENDO': 10, 'DEFORMAÇÃO DE TRILHA DE RODA': 11}
+    itens_defeitos_ordenados = sorted(mapa_defeitos.items(), key=lambda item: item[1])
+    opcoes_defeito = [''] + [f"{num} - {defeito}" for defeito, num in itens_defeitos_ordenados]
+    
+    # --- CORREÇÃO: O valor interno para 'Alto (H)' agora é 'H' ---
+    opcoes_severidade = [('', ''), ('Alto (H)', 'H'), ('Médio (M)', 'M'), ('Baixo (L)', 'L')]
 
     for amostra_id, amostra_data in st.session_state.amostras.items():
         pos, area, df = amostra_data['posicao'], amostra_data['area'], amostra_data['df']
@@ -191,14 +170,8 @@ else:
                         df.loc[i, 'VALOR DEDUZIDO'] = prever_valor_deduzido(row['DEFEITO'], row['SEVERIDADE_CODE'], df.loc[i, 'DENSIDADE'])
                     st.session_state.amostras[amostra_id]['df'] = df
                 st.rerun()
-            
-            # Adicionei a coluna 'DEFEITO_UI' para exibição, mantendo 'DEFEITO' limpa para os cálculos
-            if 'DEFEITO_UI' not in df.columns and 'DEFEITO' in df.columns:
-                 # Inverte o mapa para encontrar a chave (UI) a partir do valor (real)
-                mapa_real_para_ui = {v: k for k, v in MAPA_DEFEITOS_UI.items()}
-                df['DEFEITO_UI'] = df['DEFEITO'].map(mapa_real_para_ui)
 
-            df_para_exibir = df[['DEFEITO_UI', 'SEVERIDADE', 'Q1', 'Q2', 'Q3', 'Q4', 'TOTAL', 'DENSIDADE', 'VALOR DEDUZIDO']].rename(columns={'DEFEITO_UI': 'DEFEITO'})
+            df_para_exibir = df.drop(columns=['SEVERIDADE_CODE'], errors='ignore')
             numeric_cols = df_para_exibir.select_dtypes(include=np.number).columns
             format_dict = {col: '{:.2f}' for col in numeric_cols}
             st.dataframe(df_para_exibir.style.format(format_dict, na_rep=""), use_container_width=True)
@@ -206,9 +179,8 @@ else:
             with st.form(key=f"form_{amostra_id}", clear_on_submit=True):
                 st.markdown("**Adicionar / Excluir Linha de Defeito**")
                 c1,c2,c3,c4,c5,c6 = st.columns([3, 2, 1, 1, 1, 1])
-                defeito_ui = c1.selectbox("Defeito", options=OPCOES_DEFEITO_UI, label_visibility="collapsed")
-                severidade_tupla = c2.selectbox("Severidade", options=OPCOES_SEVERIDADE_UI, format_func=lambda x: x[0], label_visibility="collapsed")
-                
+                defeito = c1.selectbox("Defeito", options=opcoes_defeito, label_visibility="collapsed")
+                severidade_tupla = c2.selectbox("Severidade", options=opcoes_severidade, format_func=lambda x: x[0], label_visibility="collapsed")
                 q1 = c3.number_input("Q1", min_value=0.0, format="%.2f", label_visibility="collapsed")
                 q2 = c4.number_input("Q2", min_value=0.0, format="%.2f", label_visibility="collapsed")
                 q3 = c5.number_input("Q3", min_value=0.0, format="%.2f", label_visibility="collapsed")
@@ -219,14 +191,12 @@ else:
                 idx_excluir = c_submit_2.number_input("Índice p/ Excluir", min_value=0, max_value=max(0, len(df)-1), step=1)
                 del_button = c_submit_3.form_submit_button("Excluir Linha")
 
-                if add_button and defeito_ui and severidade_tupla[1]:
-                    defeito_real = MAPA_DEFEITOS_UI[defeito_ui]
+                if add_button and defeito and severidade_tupla[1]:
                     quantidades = [q1, q2, q3, q4]
                     total = sum(quantidades)
                     densidade = (total / area_atual) * 100
-                    valor = prever_valor_deduzido(defeito_real, severidade_tupla[1], densidade)
-                    
-                    nova_linha = {'DEFEITO': defeito_real, 'DEFEITO_UI': defeito_ui, 'SEVERIDADE': severidade_tupla[0], 'SEVERIDADE_CODE': severidade_tupla[1], 'Q1': q1, 'Q2': q2, 'Q3': q3, 'Q4': q4, 'TOTAL': total, 'DENSIDADE': densidade, 'VALOR DEDUZIDO': valor}
+                    valor = prever_valor_deduzido(defeito, severidade_tupla[1], densidade)
+                    nova_linha = {'DEFEITO': defeito, 'SEVERIDADE': severidade_tupla[0], 'SEVERIDADE_CODE': severidade_tupla[1], 'Q1': q1, 'Q2': q2, 'Q3': q3, 'Q4': q4, 'TOTAL': total, 'DENSIDADE': densidade, 'VALOR DEDUZIDO': valor}
                     st.session_state.amostras[amostra_id]['df'] = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
                     st.rerun()
                 
